@@ -336,6 +336,9 @@ function acknowledgementHtml(data: ProjectRequest, reference: string) {
     </tr>`;
 
   return `<div style="font:14px system-ui;color:#111827;max-width:560px">
+    <div style="margin:0 0 22px">
+      <img src="https://synctechlimited.site/icon.png" alt="Synctech Limited" width="56" height="56" style="display:block;border-radius:12px" />
+    </div>
     <p style="margin:0 0 14px;font-size:15px">Hi ${escapeHtml(data.fullName.split(" ")[0])},</p>
     <p style="margin:0 0 14px;line-height:1.6">
       Thanks for reaching out to Synctech Limited. We&rsquo;ve received your
