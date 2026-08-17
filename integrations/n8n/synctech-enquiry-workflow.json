@@ -1,0 +1,197 @@
+{
+  "name": "Synctech — Project Enquiry Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "synctech-enquiry",
+        "responseMode": "lastNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Website Enquiry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-620, 300],
+      "webhookId": "synctech-enquiry"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verifies the HMAC signature the website sends.\n// Set ENQUIRY_WEBHOOK_SECRET on the website to the same value you put in\n// the n8n credential/variable below, then this node proves the request is\n// genuinely from your site and not someone who guessed the URL.\n\nconst crypto = require('crypto');\n\n// TODO: replace with your shared secret (or read from an n8n variable).\nconst SECRET = $env.SYNCTECH_WEBHOOK_SECRET || '';\nconst MAX_AGE_SECONDS = 300;\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst signature = headers['x-synctech-signature'] || '';\nconst timestamp = headers['x-synctech-timestamp'] || '';\n\n// The raw body string exactly as sent — do not re-serialise, whitespace matters.\nconst rawBody = item.binary?.data\n  ? Buffer.from(item.binary.data.data, 'base64').toString('utf8')\n  : JSON.stringify(item.json.body);\n\nif (!SECRET) {\n  // No secret configured: pass through, but make it visible.\n  return [{ json: { ...JSON.parse(rawBody), _verified: false, _reason: 'no secret configured' } }];\n}\n\nif (!signature || !timestamp) {\n  throw new Error('Missing signature headers — request did not come from the website.');\n}\n\nconst age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));\nif (age > MAX_AGE_SECONDS) {\n  throw new Error(`Signature too old (${age}s) — possible replay.`);\n}\n\nconst expected = 'sha256=' + crypto\n  .createHmac('sha256', SECRET)\n  .update(`${timestamp}.${rawBody}`)\n  .digest('hex');\n\nconst a = Buffer.from(signature);\nconst b = Buffer.from(expected);\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {\n  throw new Error('Invalid signature — rejecting request.');\n}\n\nreturn [{ json: { ...JSON.parse(rawBody), _verified: true } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-400, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simple, explainable lead triage. No AI needed for this part —\n// it is deterministic, free, and you can reason about why a lead was routed.\n\nconst HIGH_VALUE = ['$15,000 – $50,000', '$50,000+', 'Ongoing monthly retainer'];\n\nreturn $input.all().map((item) => {\n  const d = item.json;\n  const highValue = HIGH_VALUE.includes(d.budget);\n  const hasCompany = Boolean(d.companyName && d.companyName.trim());\n  const detailed = (d.description || '').length > 200;\n  const flagged = Boolean(d.warning);\n\n  // 0–100. Tune the weights to match how you actually qualify work.\n  let score = 40;\n  if (highValue) score += 30;\n  if (hasCompany) score += 15;\n  if (detailed) score += 15;\n  if (flagged) score -= 30;\n\n  score = Math.max(0, Math.min(100, score));\n\n  return {\n    json: {\n      ...d,\n      priority: score >= 75 ? 'high' : score >= 50 ? 'normal' : 'low',\n      score,\n      reasons: [\n        highValue ? 'budget in target range' : 'budget below target or unspecified',\n        hasCompany ? 'named company' : 'no company given',\n        detailed ? 'detailed description' : 'short description',\n        flagged ? `flagged: ${d.warning}` : 'no spam signals',\n      ],\n    },\n  };\n});"
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-180, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "high-priority",
+                    "leftValue": "={{ $json.priority }}",
+                    "rightValue": "high",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "High priority"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "everything-else",
+                    "leftValue": "={{ $json.priority }}",
+                    "rightValue": "high",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Standard"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Route by Priority",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [60, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "summary-field",
+              "name": "aiSummary",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "AI Summary (replace me)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [300, 180],
+      "notes": "Swap this Set node for an AI node (OpenAI / Anthropic / Ollama) to summarise the enquiry and draft a reply. Prompt suggestion is in MANUAL.md section 11. It is a plain passthrough by default so the workflow runs with no AI credentials."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=Your project enquiry — {{ $json.reference }}",
+        "message": "=Hi {{ $json.fullName.split(' ')[0] }},\n\nThanks again for getting in touch with Synctech Limited about {{ $json.service }}.\n\nYour reference is {{ $json.reference }}. An engineer is reviewing the details you sent and will come back to you with the questions that decide scope.\n\nIf anything has changed in the meantime, just reply to this email.\n\n— Synctech Limited\nBuild. Automate. Secure. Scale.",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Follow-up to Client",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [540, 180],
+      "notes": "OPTIONAL and off by default in the docs. The website ALREADY sends an instant acknowledgement. Use this for a later touch (e.g. behind a Wait node), not a duplicate of the first email."
+    },
+    {
+      "parameters": {
+        "content": "## Synctech — Project Enquiry Intake\n\nReceives enquiries from the website form.\n\n**Setup**\n1. Open **Website Enquiry**, copy the Production URL.\n2. Put it in the website's `ENQUIRY_WEBHOOK_URL`.\n3. Generate a secret, set it as `ENQUIRY_WEBHOOK_SECRET` on the website\n   and as the `SYNCTECH_WEBHOOK_SECRET` env var in n8n.\n4. Run `npm run check-notify -- --send` on the website to fire a test.\n\n**Note:** the website already emails you AND acknowledges the client.\nThis workflow is for everything on top: scoring, routing, CRM, sheets,\nAI summarising, delayed follow-ups.",
+        "height": 320,
+        "width": 420
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Read me first",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-620, -120]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "queued-field",
+              "name": "queuedFor",
+              "value": "standard follow-up",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Standard Queue",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [300, 420],
+      "notes": "Attach your CRM / Google Sheets / Notion node here for non-urgent leads."
+    }
+  ],
+  "connections": {
+    "Website Enquiry": {
+      "main": [[{ "node": "Verify Signature", "type": "main", "index": 0 }]]
+    },
+    "Verify Signature": {
+      "main": [[{ "node": "Score Lead", "type": "main", "index": 0 }]]
+    },
+    "Score Lead": {
+      "main": [[{ "node": "Route by Priority", "type": "main", "index": 0 }]]
+    },
+    "Route by Priority": {
+      "main": [
+        [{ "node": "AI Summary (replace me)", "type": "main", "index": 0 }],
+        [{ "node": "Standard Queue", "type": "main", "index": 0 }]
+      ]
+    },
+    "AI Summary (replace me)": {
+      "main": [[{ "node": "Follow-up to Client", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
